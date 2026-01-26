@@ -11,6 +11,7 @@ private:
     std::vector<uint8_t> memory;
     const size_t BLOCK_SIZE = 4096;
     size_t BLOCK_COUNT = 0;
+    // size_t BLOCKS_PER_GROUP = 4
 
 public:
     // Constructor
