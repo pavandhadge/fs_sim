@@ -31,11 +31,15 @@ class FileSystem{
 
 
   public:
+  ~FileSystem() {
+      delete this->sb;
+  }
   FileSystem(Disk& disk);
   void format();
   void mount();
 // size_t traverse_path_till_parent(std::vector<std::string>&tokenized_path);
   //for noe read only prints the buffer in future we will return a unit_8 pointer
+  void add_entry_to_dir(Inode* parent_inode, size_t newfile_id, std::string filename);
 
   void create_file(std::string path);
   void delete_file(std::string path);

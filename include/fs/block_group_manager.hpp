@@ -25,7 +25,8 @@ private:
     int find_first_free_bit(uint8_t* bitmap, int max_bits);
 
 public:
-    BlockGroupManager(Disk& d, SuperBlock* sb, int id)
+int get_block_id_for_inode(int inode_id) ;
+   BlockGroupManager(Disk& d, SuperBlock* sb, int id)
         : disk(d), sb(sb), group_id(id) {}
 
     int allocate_inode();

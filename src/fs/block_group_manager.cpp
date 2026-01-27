@@ -140,3 +140,19 @@ int BlockGroupManager::find_first_free_bit(uint8_t* bitmap, int max_bits) {
     }
     return -1;
 }
+
+
+
+int BlockGroupManager::get_block_id_for_inode(int inode_id) {
+    int group_id = inode_id / sb->inodes_per_group;
+    int local_index = inode_id % sb->inodes_per_group;
+
+    // How many blocks into the table do we need to skip?
+    // Ex: Inode 0-63 are in offset 0. Inode 64 is in offset 1.
+    int inodes_per_block = 4096 / sizeof(Inode);
+    int block_offset = local_index / inodes_per_block;
+
+    // Start of that group + Table Offset + Calculated Offset
+    int group_start = group_id * sb->blocks_per_group;
+    return group_start + INODE_TABLE_OFFSET + block_offset;
+}

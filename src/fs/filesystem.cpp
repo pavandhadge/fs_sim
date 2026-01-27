@@ -2,6 +2,7 @@
 #include "fs/block_group_manager.hpp"
 #include "fs/disk.hpp"
 #include "fs/disk_datastructures.hpp"
+#include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <iostream>
@@ -14,9 +15,6 @@ FileSystem::FileSystem(Disk& disk_allocated) : disk(disk_allocated) {
     this->sb = new SuperBlock();
 }
 
-FileSystem::~FileSystem() {
-    delete this->sb;
-}
 
 // ==========================================
 // FORMAT: The "Factory Reset" (Write Only)
@@ -96,9 +94,6 @@ void FileSystem::mount() {
 }
 
 
-void FileSystem::create_file(std::string path){
-
-}
 
 // Returns the Inode ID if found, or -1 (or throws) if not found
 size_t FileSystem::find_inode_in_dir(Inode* parent_inode, const std::string& name) {
@@ -145,6 +140,7 @@ Inode* FileSystem::get_global_inode_ptr(size_t global_id) {
     return block_group_managers[group_index].get_inode(global_id);
 }
 
+//inode id of hte parent
 size_t FileSystem::traverse_path_till_parent(std::vector<std::string>& tokenized_path) {
     size_t current_id = sb->home_dir_inode;
 
@@ -159,7 +155,7 @@ size_t FileSystem::traverse_path_till_parent(std::vector<std::string>& tokenized
         // -------------------------------
 
         if (current_inode->file_type != FS_DIRECTORY) {
-            throw std::runtime_error("Invalid Path: Not a directory.");
+            throw std::runtime_error("Invalid Path: Not a directory : "+tokenized_path[i]);
         }
 
         // Search inside this inode (The logic for this function stays the same)
@@ -177,6 +173,100 @@ size_t FileSystem::traverse_path_till_parent(std::vector<std::string>& tokenized
 void FileSystem::read_dir(std::string path){
     auto tokenized_path = tokenize_path(path, '/');
 
+}
 
 
+void FileSystem::create_file(std::string path) {
+    auto tokenized_path = tokenize_path(path, '/');
+    std::string filename = tokenized_path.back(); // Get "file.txt"
+
+    // 1. Get Parent Directory
+    size_t parent_inodeid = traverse_path_till_parent(tokenized_path);
+    Inode* parent_inode = get_global_inode_ptr(parent_inodeid);
+
+    // Safety: Check if file already exists in parent
+    if (find_inode_in_dir(parent_inode, filename) != 0) {
+        throw std::runtime_error("Error: File already exists.");
+    }
+
+    // 2. Allocate Inode (With Safe Loop)
+    int newfile_id = -1;
+    for (int i = 0; i < block_group_managers.size(); i++) {
+        newfile_id = block_group_managers[i].allocate_inode();
+        if (newfile_id != -1) break; // Found one!
+    }
+
+    if (newfile_id == -1) {
+        throw std::runtime_error("Disk Full: Unable to allocate inode.");
+    }
+
+    // 3. Initialize the Inode
+    // Note: get_global_inode_ptr gives direct access to Disk Memory.
+    // Assigning values here writes them to the disk immediately.
+    Inode* newfile_inode = get_global_inode_ptr(newfile_id);
+    newfile_inode->id = newfile_id;
+    newfile_inode->file_size = 0;
+    newfile_inode->file_type = FS_FILE_TYPES::FS_FILE;
+    // Important: Zero out the block pointers just in case
+    std::memset(newfile_inode->direct_blocks, 0, sizeof(newfile_inode->direct_blocks));
+
+    // 4. THE MISSING LINK: Add entry to Parent Directory
+    // You need to write a helper for this (see logic below)
+    add_entry_to_dir(parent_inode, newfile_id, filename);
+
+    std::cout << "File " << filename << " successfully created with ID " << newfile_id << "\n";
+}
+
+void FileSystem::add_entry_to_dir(Inode* parent_inode, size_t newfile_id, std::string filename) {
+    int max_entries = 4096 / sizeof(DirEntry); // Fixed: 4096, not sizeof pointer
+
+    // Loop through the 12 possible direct pointers
+    for (int i = 0; i < 12; i++) {
+        size_t curr_block_id = parent_inode->direct_blocks[i];
+
+        // CASE 1: Block is not allocated yet.
+        // We need to grow the directory!
+        if (curr_block_id == 0) {
+            // 1. Allocate a new block from the same group as the parent
+            // (You might need a helper to find which group the parent is in)
+            int group_idx = parent_inode->id / sb->inodes_per_group;
+            int new_block = block_group_managers[group_idx].allocate_block();
+
+            if (new_block == -1) throw std::runtime_error("Disk Full: Cannot grow directory");
+
+            // 2. Link it to the parent
+            parent_inode->direct_blocks[i] = new_block;
+            curr_block_id = new_block;
+        }
+
+        // CASE 2: Scan the block for an empty slot
+        uint8_t* block_ptr = disk.get_ptr(curr_block_id);
+        DirEntry* entry = reinterpret_cast<DirEntry*>(block_ptr);
+
+        // Fixed: Use 'j' to avoid shadowing 'i'
+        for (int j = 0; j < max_entries; j++) {
+            // Found an empty slot (ID 0 means free)
+            if (entry[j].inode_id == 0) {
+
+                // 1. Link the ID
+                entry[j].inode_id = newfile_id;
+
+                // 2. Copy the Name safely (Fixed: strncpy)
+                // Clear memory first to remove old garbage
+                std::memset(entry[j].name, 0, 255);
+                std::strncpy(entry[j].name, filename.c_str(), 254);
+
+                // 3. Set Length
+                entry[j].name_len = static_cast<uint8_t>(filename.size());
+
+                // 4. Update Parent Size (Crucial for `ls`)
+                // We physically added an entry, so we increase the size count
+                parent_inode->file_size += sizeof(DirEntry);
+
+                return; // Done!
+            }
+        }
+    }
+
+    throw std::runtime_error("Directory Full: Limit of 12 blocks reached.");
 }
