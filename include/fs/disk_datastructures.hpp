@@ -17,6 +17,7 @@ struct SuperBlock {
     size_t total_blocks;
     size_t inodes_per_group; // Removed 'const' to allow reading from disk
     size_t blocks_per_group;
+    size_t home_dir_inode;
 
     // Default Constructor
     SuperBlock() :
