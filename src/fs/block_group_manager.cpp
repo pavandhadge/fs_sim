@@ -24,21 +24,15 @@ uint8_t* BlockGroupManager::get_inode_table_start() {
 // INODE LOGIC
 // ==========================================
 Inode* BlockGroupManager::get_inode(int inode_id) {
-    // 1. Calculate Limits
     int inodes_per_group = sb->inodes_per_group;
     int start_id = group_id * inodes_per_group;
     int end_id   = start_id + inodes_per_group;
 
-    // 2. FIXED: Bounds check logic was flipped
     if (inode_id < start_id || inode_id >= end_id) {
         throw std::out_of_range("BlockGroupManager: Inode ID not in this group");
     }
 
-    // 3. FIXED: Use inodes_per_group for modulo
     int local_index = inode_id % inodes_per_group;
-
-    // 4. Pointer Arithmetic
-    // Since Disk memory is a vector, we can safely add offset across block boundaries
     uint8_t* table_start = get_inode_table_start();
     size_t byte_offset = local_index * sizeof(Inode);
 
@@ -48,28 +42,23 @@ Inode* BlockGroupManager::get_inode(int inode_id) {
 int BlockGroupManager::allocate_inode() {
     uint8_t* bitmap = get_inode_bitmap_ptr();
 
-    // Find free bit (0 to inodes_per_group-1)
-    int local_index = find_first_free_bit(bitmap, sb->inodes_per_group);
+    // GEMINI FIX: Inode 0 (Global) is usually reserved.
+    int start_bit = (group_id == 0) ? 1 : 0;
 
-    if (local_index == -1) return -1; // Group full
+    int local_index = find_first_free_bit(bitmap, sb->inodes_per_group, start_bit);
+    if (local_index == -1) return -1;
 
-    // Mark used
     set_bit(bitmap, local_index);
 
-    // CRITICAL: Zero out the new inode memory
-    // We calculate the Global ID to get the pointer
     int global_id = (group_id * sb->inodes_per_group) + local_index;
     Inode* node = get_inode(global_id);
     std::memset(node, 0, sizeof(Inode));
-
-    // Initialize standard fields
     node->id = global_id;
 
     return global_id;
 }
 
 void BlockGroupManager::free_inode(int global_inode_id) {
-    // FIXED: Convert to local index
     int local_index = global_inode_id % sb->inodes_per_group;
     clear_bit(get_inode_bitmap_ptr(), local_index);
 }
@@ -83,24 +72,24 @@ bool BlockGroupManager::is_inode_allocated(int global_inode_id) {
 // BLOCK LOGIC
 // ==========================================
 int BlockGroupManager::allocate_block() {
-    // FIXED: Use the helper, not the hardcoded constant
     uint8_t* bitmap = get_block_bitmap_ptr();
 
-    int local_index = find_first_free_bit(bitmap, sb->blocks_per_group);
-
-    if (local_index == -1) return -1;
-
-    // FIXED: Reserve Block 0 of the group (if it's Group 0, it's Superblock)
-    // If local_index is 0, we should skip it to maintain symmetry/safety
-    if (local_index == 0) {
-        set_bit(bitmap, 0); // Mark it used so we don't find it again
-        return allocate_block(); // Try again
+    // GEMINI FIX: In Group 0, we must skip the Metadata blocks (SB + Bitmaps + Table)
+    int start_bit = 0;
+    if (group_id == 0) {
+        // Calculate how many blocks the Inode Table takes
+        int table_size_blocks = (sb->inodes_per_group * sizeof(Inode)) / disk.get_block_size();
+        // Offset = 1(SB) + 1(IBMap) + 1(BBMap) + TableSize
+        start_bit = INODE_TABLE_OFFSET + table_size_blocks;
     }
 
-    set_bit(bitmap, local_index);
+    int local_index = find_first_free_bit(bitmap, sb->blocks_per_group, start_bit);
+    if (local_index == -1) return -1;
 
-    // Zero out the actual data block
+    set_bit(bitmap, local_index);
     int global_block_id = (group_id * sb->blocks_per_group) + local_index;
+
+    // Zero out the new block
     std::memset(disk.get_ptr(global_block_id), 0, disk.get_block_size());
 
     return global_block_id;
@@ -112,7 +101,7 @@ void BlockGroupManager::free_block(int global_block_id) {
 }
 
 // ==========================================
-// BITWISE HELPERS (Keep as is, they looked good)
+// BITWISE HELPERS
 // ==========================================
 bool BlockGroupManager::get_bit(uint8_t* bitmap, int index) {
     return (bitmap[index / 8] & (1 << (index % 8))) != 0;
@@ -126,33 +115,20 @@ void BlockGroupManager::clear_bit(uint8_t* bitmap, int index) {
     bitmap[index / 8] &= ~(1 << (index % 8));
 }
 
-int BlockGroupManager::find_first_free_bit(uint8_t* bitmap, int max_bits) {
-    int max_bytes = max_bits / 8;
-    for (int i = 0; i < max_bytes; i++) {
-        if (bitmap[i] != 0xFF) {
-            for (int bit = 0; bit < 8; bit++) {
-                if (!((bitmap[i] >> bit) & 1)) {
-                    int found = (i * 8) + bit;
-                    if (found < max_bits) return found;
-                }
-            }
+int BlockGroupManager::find_first_free_bit(uint8_t* bitmap, int max_bits, int start_bit) {
+    for (int i = start_bit; i < max_bits; i++) {
+        if (!get_bit(bitmap, i)) {
+            return i;
         }
     }
     return -1;
 }
 
-
-
 int BlockGroupManager::get_block_id_for_inode(int inode_id) {
     int group_id = inode_id / sb->inodes_per_group;
     int local_index = inode_id % sb->inodes_per_group;
-
-    // How many blocks into the table do we need to skip?
-    // Ex: Inode 0-63 are in offset 0. Inode 64 is in offset 1.
     int inodes_per_block = 4096 / sizeof(Inode);
     int block_offset = local_index / inodes_per_block;
-
-    // Start of that group + Table Offset + Calculated Offset
     int group_start = group_id * sb->blocks_per_group;
     return group_start + INODE_TABLE_OFFSET + block_offset;
 }

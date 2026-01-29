@@ -22,11 +22,10 @@ private:
     bool get_bit(uint8_t* bitmap, int local_index);
     void set_bit(uint8_t* bitmap, int local_index);
     void clear_bit(uint8_t* bitmap, int local_index);
-    int find_first_free_bit(uint8_t* bitmap, int max_bits);
+    int find_first_free_bit(uint8_t* bitmap, int max_bits, int start_bit = 0);
 
 public:
-int get_block_id_for_inode(int inode_id) ;
-   BlockGroupManager(Disk& d, SuperBlock* sb, int id)
+    BlockGroupManager(Disk& d, SuperBlock* sb, int id)
         : disk(d), sb(sb), group_id(id) {}
 
     int allocate_inode();
@@ -37,4 +36,7 @@ int get_block_id_for_inode(int inode_id) ;
 
     Inode* get_inode(int global_inode_id);
     bool is_inode_allocated(int global_inode_id);
+
+    // GEMINI FIX: Added this helper here as requested
+    int get_block_id_for_inode(int inode_id);
 };
