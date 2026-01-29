@@ -30,6 +30,11 @@ class FileSystem{
     size_t traverse_path_till_parent(std::vector<std::string>& tokenized_path);
 
 
+    void read_direct_block_to_buffer(Inode* file,uint8_t* buffer);
+    void release_file_resources(size_t inode_id);
+    void recursive_resource_release(size_t dir_inode_id);
+  void add_entry_to_dir(Inode* parent_inode, size_t newfile_id, std::string filename);
+  void create_fs_entry(std::string path, FS_FILE_TYPES type) ;
   public:
   ~FileSystem() {
       delete this->sb;
@@ -39,13 +44,13 @@ class FileSystem{
   void mount();
 // size_t traverse_path_till_parent(std::vector<std::string>&tokenized_path);
   //for noe read only prints the buffer in future we will return a unit_8 pointer
-  void add_entry_to_dir(Inode* parent_inode, size_t newfile_id, std::string filename);
 
   void create_file(std::string path);
   void delete_file(std::string path);
-  void read_file(std::string path);
+  std::vector<uint8_t> read_file(std::string path);
 
   void create_dir(std::string path);
   void delete_dir(std::string path);
-  void read_dir(std::string path);
+  // std::vector<std::string> read_dir(std::string path);
+  std::vector<std::string> list_dir(std::string path) ;
 };
