@@ -6,6 +6,7 @@
 #include <cassert>
 #include <random>
 #include <algorithm>
+#include <cstdio> // For std::remove
 
 // Simple Test Framework Helper
 #define ASSERT(condition, message) \
@@ -16,10 +17,14 @@
         std::cout << "[PASS] " << message << "\n"; \
     }
 
+// Helper: Clean up old test files so we start fresh
+void cleanup_file(const char* filename) {
+    std::remove(filename);
+}
+
 // Helper to generate random data
 std::vector<uint8_t> generate_random_data(size_t size) {
     std::vector<uint8_t> data(size);
-    // Use a fixed seed for reproducibility
     std::mt19937 gen(42);
     std::uniform_int_distribution<> dis(0, 255);
     for (size_t i = 0; i < size; ++i) data[i] = static_cast<uint8_t>(dis(gen));
@@ -31,15 +36,19 @@ std::vector<uint8_t> generate_random_data(size_t size) {
 // ==========================================
 void test_persistence() {
     std::cout << "\n=== Test 1: Persistence (Simulated Reboot) ===\n";
+    const char* TEST_IMG = "test_persistence.img";
+    cleanup_file(TEST_IMG); // Start fresh
 
     const size_t DISK_SIZE = 5 * 1024 * 1024; // 5MB
-    Disk shared_disk(DISK_SIZE);
 
     // SESSION 1: Format and Write
     {
-        std::cout << "-> Mounting Session 1...\n";
-        FileSystem fs(shared_disk);
-        fs.format(); // Wipe disk
+        std::cout << "-> [Session 1] Booting up...\n";
+        // Create disk backed by file
+        Disk disk(DISK_SIZE, TEST_IMG);
+        FileSystem fs(disk);
+
+        fs.format(); // Wipes the file
 
         fs.create_dir("/home");
         fs.create_file("/home/config.txt");
@@ -47,13 +56,17 @@ void test_persistence() {
         std::string secret = "This data must survive the reboot.";
         std::vector<uint8_t> data(secret.begin(), secret.end());
         fs.write_file("/home/config.txt", data);
-        std::cout << "-> Data written. Unmounting Session 1 (Destructor called).\n";
+        std::cout << "-> [Session 1] Data written. Powering down (Destructor saves to disk).\n";
     }
+    // End of Scope: Disk destructor runs -> msync -> updates test_persistence.img
 
     // SESSION 2: Remount and Verify
     {
-        std::cout << "-> Mounting Session 2 (Simulating Reboot)...\n";
-        FileSystem fs(shared_disk);
+        std::cout << "-> [Session 2] Rebooting...\n";
+        // Re-open the SAME file
+        Disk disk(DISK_SIZE, TEST_IMG);
+        FileSystem fs(disk);
+
         fs.mount(); // READ ONLY. Do not format!
 
         auto files = fs.list_dir("/home");
@@ -63,6 +76,8 @@ void test_persistence() {
         std::string read_str(data.begin(), data.end());
         ASSERT(read_str == "This data must survive the reboot.", "File content persisted");
     }
+
+    cleanup_file(TEST_IMG); // Cleanup after success
 }
 
 // ==========================================
@@ -70,7 +85,10 @@ void test_persistence() {
 // ==========================================
 void test_deep_tree() {
     std::cout << "\n=== Test 2: Deep Directory Tree ===\n";
-    Disk disk(10 * 1024 * 1024);
+    const char* TEST_IMG = "test_tree.img";
+    cleanup_file(TEST_IMG);
+
+    Disk disk(10 * 1024 * 1024, TEST_IMG);
     FileSystem fs(disk);
     fs.format();
 
@@ -91,6 +109,8 @@ void test_deep_tree() {
     // Verify by walking down
     auto list = fs.list_dir("/a/b/c/d/e");
     ASSERT(list.size() == 1 && list[0] == "deep_file.txt", "Found file at depth 5");
+
+    cleanup_file(TEST_IMG);
 }
 
 // ==========================================
@@ -98,8 +118,10 @@ void test_deep_tree() {
 // ==========================================
 void test_stress_allocation() {
     std::cout << "\n=== Test 3: Stress Test (Create/Write/Delete Loop) ===\n";
+    const char* TEST_IMG = "test_stress.img";
+    cleanup_file(TEST_IMG);
 
-    Disk disk(20 * 1024 * 1024); // 20MB
+    Disk disk(20 * 1024 * 1024, TEST_IMG); // 20MB
     FileSystem fs(disk);
     fs.format();
 
@@ -137,11 +159,12 @@ void test_stress_allocation() {
     ASSERT(root_files.empty(), "Root directory is empty after deletion");
 
     // 4. RE-ALLOCATION (The real test)
-    // If you have a memory leak (bitmaps not clearing), this will fail/crash
     std::cout << "-> Re-allocating to check for bitmap leaks...\n";
     fs.create_file("/check_leak");
     fs.write_file("/check_leak", generate_random_data(4096));
     ASSERT(true, "Re-allocation successful (Bitmaps cleared correctly)");
+
+    cleanup_file(TEST_IMG);
 }
 
 // ==========================================
@@ -149,7 +172,10 @@ void test_stress_allocation() {
 // ==========================================
 void test_large_file() {
     std::cout << "\n=== Test 4: Large File Boundary (48KB Limit) ===\n";
-    Disk disk(5 * 1024 * 1024);
+    const char* TEST_IMG = "test_large.img";
+    cleanup_file(TEST_IMG);
+
+    Disk disk(5 * 1024 * 1024, TEST_IMG);
     FileSystem fs(disk);
     fs.format();
 
@@ -175,6 +201,8 @@ void test_large_file() {
         std::cout << "[PASS] Caught expected error: " << e.what() << "\n";
     }
     ASSERT(caught, "System correctly rejected file > 48KB");
+
+    cleanup_file(TEST_IMG);
 }
 
 int main() {

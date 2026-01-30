@@ -4,16 +4,26 @@
 #include <cstring>
 #include <stdexcept>
 #include <iostream>
-#include <iomanip> // GEMINI FIX: Added for std::setw in hex_dump
+#include <iomanip>
 
 class Disk {
 private:
-    std::vector<uint8_t> memory;
+    // --- OLD ABSTRACTION (Vector) ---
+    // std::vector<uint8_t> memory;
+
+    // --- NEW ABSTRACTION (Memory Mapped File) ---
+    uint8_t* mapped_data; // Pointer to the file contents in RAM
+    int fd;               // File Descriptor
+
     const size_t BLOCK_SIZE = 4096;
     size_t BLOCK_COUNT = 0;
 
 public:
-    Disk(size_t capacity_bytes);
+    // GEMINI FIX: Added filename parameter with default for persistence
+    Disk(size_t capacity_bytes, const char* filename = "disk.img");
+
+    // GEMINI FIX: Added destructor to close/sync the file
+    ~Disk();
 
     void read_block(int block_id, void* buffer);
     void write_block(int block_id, const void* buffer);
