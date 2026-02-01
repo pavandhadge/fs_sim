@@ -17,6 +17,17 @@ std::vector<std::string> parse_command(const std::string& input) {
     return tokens;
 }
 
+std::string format_permissions(uint16_t p, bool is_dir) {
+    std::string res = is_dir ? "d" : "-";
+    const char* chars = "rwx";
+    for (int i = 6; i >= 0; i -= 3) {
+        res += (p & (4 << i)) ? 'r' : '-';
+        res += (p & (2 << i)) ? 'w' : '-';
+        res += (p & (1 << i)) ? 'x' : '-';
+    }
+    return res;
+}
+
 int main() {
     // 1. User Input for Disk Size
     size_t size_mb = 0;
@@ -74,13 +85,16 @@ int main() {
     }
 
     std::cout << "\n=== File System REPL ===\n";
-    std::cout << "Commands: ls, touch, mkdir, rm, rmdir, write, read, format, exit\n";
+    std::cout << "Commands: ls, touch, mkdir, rm, rmdir, write, read, format, login, logout, whoami, exit\n";
     std::cout << "Note: Changes are automatically saved when you 'exit'.\n";
 
     // 4. REPL Loop
     std::string line;
     while (true) {
-        std::cout << "\nfs> ";
+        // Display current user in the prompt (like a real Linux terminal)
+        uint16_t uid = fs.get_current_user();
+        std::cout << "\n[user:" << uid << "] fs> ";
+
         if (!std::getline(std::cin, line)) break;
         if (line.empty()) continue;
 
@@ -91,6 +105,21 @@ int main() {
             if (cmd == "exit") {
                 std::cout << "[System] Syncing to disk and exiting...\n";
                 break;
+            }
+            // --- NEW: LOGIN COMMAND ---
+            else if (cmd == "login") {
+                if (args.size() < 3) throw std::runtime_error("Usage: login <uid> <gid>");
+                uint16_t new_uid = std::stoi(args[1]);
+                uint16_t new_gid = std::stoi(args[2]);
+                fs.login(new_uid, new_gid);
+            }
+            // --- NEW: LOGOUT COMMAND ---
+            else if (cmd == "logout") {
+                fs.logout();
+            }
+            // --- NEW: WHOAMI COMMAND ---
+            else if (cmd == "whoami") {
+                std::cout << "Current UID: " << fs.get_current_user() << "\n";
             }
             else if (cmd == "format") {
                 std::cout << "[Warning] This will erase all data. Confirm? (y/n): ";
@@ -107,12 +136,15 @@ int main() {
             }
             else if (cmd == "ls") {
                 std::string path = (args.size() > 1) ? args[1] : "/";
-                auto files = fs.list_dir(path);
+                auto entries = fs.list_dir(path);
 
                 std::cout << "Listing '" << path << "':\n";
-                if (files.empty()) std::cout << "(empty)\n";
-                for (const auto& name : files) {
-                    std::cout << "  " << name << "\n";
+                if (entries.empty()) std::cout << "(empty)\n";
+                for (const auto& entry : entries) {
+                    std::cout << format_permissions(entry.permissions, entry.is_directory)
+                      << "  " << entry.uid 
+                      << "  " << entry.gid 
+                      << "  " << entry.name << "\n";
                 }
             }
             else if (cmd == "mkdir") {

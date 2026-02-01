@@ -70,7 +70,7 @@ void test_persistence() {
         fs.mount(); // READ ONLY. Do not format!
 
         auto files = fs.list_dir("/home");
-        ASSERT(files.size() == 1 && files[0] == "config.txt", "Directory listing persisted");
+        ASSERT(files.size() == 1 && files[0].name == "config.txt", "Directory listing persisted");
 
         auto data = fs.read_file("/home/config.txt");
         std::string read_str(data.begin(), data.end());
@@ -108,7 +108,7 @@ void test_deep_tree() {
 
     // Verify by walking down
     auto list = fs.list_dir("/a/b/c/d/e");
-    ASSERT(list.size() == 1 && list[0] == "deep_file.txt", "Found file at depth 5");
+    ASSERT(list.size() == 1 && list[0].name == "deep_file.txt", "Found file at depth 5");
 
     cleanup_file(TEST_IMG);
 }

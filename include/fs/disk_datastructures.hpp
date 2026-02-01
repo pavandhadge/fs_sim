@@ -43,12 +43,19 @@ struct Inode {
     size_t id;
     FS_FILE_TYPES file_type;
     size_t file_size;
+    // --- NEW PERMISSION FIELDS ---
+    uint16_t uid;         // User ID of the owner
+    uint16_t gid;         // Group ID
+    uint16_t permissions;  // e.g., 0755 (rwxr-xr-x)
     size_t direct_blocks[12];
 
     Inode() {
         id = 0;
         file_type = FS_FREE;
         file_size = 0;
+        uid = 0;          // Default to Root
+        gid = 0;          // Default to Root
+        permissions = 0644; // Default: Owner can read/write, others read only
         std::memset(direct_blocks, 0, sizeof(direct_blocks));
     }
 };

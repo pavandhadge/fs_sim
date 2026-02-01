@@ -7,6 +7,14 @@
 #include <string>
 #include <vector>
 
+struct FileEntry {
+    std::string name;
+    uint16_t uid;
+    uint16_t gid;
+    uint16_t permissions;
+    bool is_directory;
+};
+
 class FileSystem {
 private:
     Disk& disk;
@@ -25,6 +33,12 @@ private:
     // GEMINI FIX: Added this signature so create_file/dir can use it
     void create_fs_entry(std::string path, FS_FILE_TYPES type);
 
+    uint16_t current_uid = 0; // Default to root (0)
+    uint16_t current_gid = 0;
+
+    // The core "Gatekeeper" function
+    bool check_permission(Inode* node, uint16_t required_bit);
+
 public:
     FileSystem(Disk& disk);
     ~FileSystem() { delete this->sb; }
@@ -39,5 +53,13 @@ public:
 
     void create_dir(std::string path);
     void delete_dir(std::string path);
-    std::vector<std::string> list_dir(std::string path);
+
+    // CHANGE THE RETURN TYPE HERE
+    // From std::vector<std::string> to std::vector<FileEntry>
+    std::vector<FileEntry> list_dir(std::string path);
+
+    // Session Management
+    void login(uint16_t uid, uint16_t gid);
+    void logout();
+    uint16_t get_current_user() { return current_uid; }
 };

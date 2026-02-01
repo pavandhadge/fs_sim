@@ -57,6 +57,9 @@ void FileSystem::format() {
     root->file_type = FS_DIRECTORY;
     root->id = root_id;
     root->file_size = 0;
+    root->uid = 0; // Root owned
+    root->gid = 0; // Root group
+    root->permissions = 0755; // <--- ADD THIS: Ensure root is rwxr-xr-x
     // Explicitly zero block pointers (redundant but safe)
     std::memset(root->direct_blocks, 0, sizeof(root->direct_blocks));
 
@@ -202,6 +205,13 @@ void FileSystem::create_fs_entry(std::string path, FS_FILE_TYPES type) {
     new_inode->id = new_id;
     new_inode->file_size = 0;
     new_inode->file_type = type;
+    
+    // Permissions
+    new_inode->uid = current_uid; 
+    new_inode->gid = current_gid;
+    // Directories usually get 755, files get 644
+    new_inode->permissions = (type == FS_DIRECTORY) ? 0755 : 0644;
+
     std::memset(new_inode->direct_blocks, 0, sizeof(new_inode->direct_blocks));
 
     add_entry_to_dir(parent_inode, new_id, filename);
@@ -234,6 +244,10 @@ void FileSystem::write_file(std::string path, const std::vector<uint8_t>& data) 
     size_t block_size = disk.get_block_size();
     size_t required_blocks = (data.size() + block_size - 1) / block_size;
     if (required_blocks > 12) throw std::runtime_error("File too large (>48KB).");
+
+    if (!check_permission(file_inode, 2)) { // 2 = Write
+        throw std::runtime_error("Permission denied: No write access to this file.");
+    }
 
     // Free extra blocks if shrinking
     for (size_t i = required_blocks; i < 12; ++i) {
@@ -281,6 +295,10 @@ std::vector<uint8_t> FileSystem::read_file(std::string path) {
     if (file_id == 0) throw std::runtime_error("File not found.");
     Inode* file_inode = get_global_inode_ptr(file_id);
 
+    if (!check_permission(file_inode, 4)) { // 4 = Read
+        throw std::runtime_error("Permission denied: No read access to this file.");
+    }
+
     size_t max_size = 12 * disk.get_block_size();
     std::vector<uint8_t> buffer(max_size);
     read_direct_block_to_buffer(file_inode, buffer.data());
@@ -295,6 +313,11 @@ void FileSystem::delete_file(std::string path) {
     std::string filename = tokenized_path.back();
     size_t parent_id = traverse_path_till_parent(tokenized_path);
     Inode* parent_inode = get_global_inode_ptr(parent_id);
+
+    // GATEKEEPER: Check if user can modify the parent directory
+    if (!check_permission(parent_inode, 2)) { 
+        throw std::runtime_error("Permission denied: Cannot modify parent directory.");
+    }
 
     // Reuse find logic but we need the entry pointer to zero it out
     int max_entries = 4096 / sizeof(DirEntry);
@@ -351,6 +374,11 @@ void FileSystem::delete_dir(std::string path) {
     size_t parent_id = traverse_path_till_parent(tokenized_path);
     Inode* parent_inode = get_global_inode_ptr(parent_id);
 
+    // You need write permission (2) on the parent to remove a subdirectory
+    if (!check_permission(parent_inode, 2)) {
+        throw std::runtime_error("Permission denied: Cannot modify parent directory.");
+    }
+
     int max_entries = 4096 / sizeof(DirEntry);
     for (int i = 0; i < 12; i++) {
         if (parent_inode->direct_blocks[i] == 0) break;
@@ -372,7 +400,7 @@ void FileSystem::delete_dir(std::string path) {
     throw std::runtime_error("Directory not found.");
 }
 
-std::vector<std::string> FileSystem::list_dir(std::string path) {
+std::vector<FileEntry> FileSystem::list_dir(std::string path) {
     auto tokenized_path = tokenize_path(path, '/');
     size_t target_id;
 
@@ -397,8 +425,12 @@ std::vector<std::string> FileSystem::list_dir(std::string path) {
 
     Inode* dir = get_global_inode_ptr(target_id);
     if (dir->file_type != FS_DIRECTORY) throw std::runtime_error("Not a directory.");
+    // GATEKEEPER: Must have Read (4) permission to list a directory
+    if (!check_permission(dir, 4)) {
+        throw std::runtime_error("Permission denied: Cannot read directory.");
+    }
 
-    std::vector<std::string> results;
+    std::vector<FileEntry> results;
     int max = 4096 / sizeof(DirEntry);
 
     // Scan all blocks of the directory
@@ -408,9 +440,52 @@ std::vector<std::string> FileSystem::list_dir(std::string path) {
         DirEntry* entry = reinterpret_cast<DirEntry*>(disk.get_ptr(dir->direct_blocks[i]));
         for (int j = 0; j < max; j++) {
             if (entry[j].inode_id != 0) {
-                results.push_back(std::string(entry[j].name));
+              Inode* item_inode = get_global_inode_ptr(entry[j].inode_id);
+              results.push_back({
+                  std::string(entry[j].name),
+                  item_inode->uid,
+                  item_inode->gid,
+                  item_inode->permissions,
+                  item_inode->file_type == FS_DIRECTORY
+              });
             }
         }
     }
     return results;
+}
+
+void FileSystem::login(uint16_t uid, uint16_t gid) {
+    this->current_uid = uid;
+    this->current_gid = gid;
+    std::cout << "Logged in as User: " << uid << " Group: " << gid << "\n";
+}
+
+void FileSystem::logout() {
+    this->current_uid = 0; // Revert to root or a "guest" state
+    this->current_gid = 0;
+    std::cout << "Logged out. Current user is now Root.\n";
+}
+
+bool FileSystem::check_permission(Inode* node, uint16_t access_type) {
+    // 1. Root (UID 0) can do EVERYTHING
+    if (current_uid == 0) return true;
+
+    uint16_t p = node->permissions;
+
+    // 2. Check if Current User is the Owner
+    if (node->uid == current_uid) {
+        // Shift bits to check Owner permissions (the first 3 bits of the 9-bit rwxrwxrwx)
+        uint16_t owner_perms = (p >> 6) & 0x7; 
+        return (owner_perms & access_type);
+    }
+
+    // 3. Check if User is in the Group
+    if (node->gid == current_gid) {
+        uint16_t group_perms = (p >> 3) & 0x7;
+        return (group_perms & access_type);
+    }
+
+    // 4. Otherwise, check "Other" permissions
+    uint16_t other_perms = p & 0x7;
+    return (other_perms & access_type);
 }
