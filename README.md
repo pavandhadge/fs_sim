@@ -72,7 +72,7 @@ make check
 
 There are several areas where this simulation could be expanded to mirror a production file system:
 
-* **Indirect Addressing:** Currently, files are limited to 12 direct blocks (approx. 48KB). Implementing singly and doubly indirect pointers would allow for much larger files.
-* **File Backing:** The "disk" currently lives in RAM. Modifying the `Disk` class to `mmap` a binary file on the host OS would allow for true persistence across program restarts.
-* **Permissions:** Adding user IDs, group IDs, and read/write/execute permission checks to the inodes.
-* **Journaling:** Implementing a write-ahead log to prevent data corruption during crashes (similar to Ext3/4).
+* **Indirect Addressing:** Currently, files are limited to 12 direct blocks (approx. 48KB). Implementing singly and doubly indirect pointers would allow for much larger files. //i will do it or uday maybe 
+* **File Backing:** The "disk" currently lives in RAM. Modifying the `Disk` class to `mmap` a binary file on the host OS would allow for true persistence across program restarts. //done
+* **Permissions:** Adding user IDs, group IDs, and read/write/execute permission checks to the inodes. //tanmay doing it 
+* **Journaling:** Implementing a write-ahead log to prevent data corruption during crashes (similar to Ext3/4). //wal is complicated and a big challenge to do , i guess i will pass it for now 

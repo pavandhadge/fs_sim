@@ -79,4 +79,16 @@ void test_permissions() {
     std::remove(TEST_IMG);
 }
 
-// Add this to your main() in the test file
+int main() {
+    std::cout << "STARTING PERMISSION TEST (Legacy)\n";
+    std::cout << "=================================\n";
+    try {
+        test_permissions();
+    } catch (const std::exception& e) {
+        std::cerr << "\n[CRITICAL FAILURE] Uncaught Exception: " << e.what() << "\n";
+        return 1;
+    }
+    std::cout << "\n=================================\n";
+    std::cout << "PERMISSION TEST PASSED.\n";
+    return 0;
+}
