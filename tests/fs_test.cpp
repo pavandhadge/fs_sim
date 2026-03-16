@@ -171,36 +171,35 @@ void test_stress_allocation() {
 // TEST 4: Max File Size Boundary
 // ==========================================
 void test_large_file() {
-    std::cout << "\n=== Test 4: Large File Boundary (48KB Limit) ===\n";
+    std::cout << "\n=== Test 4: Large File (with Indirect Blocks) ===\n";
     const char* TEST_IMG = "test_large.img";
     cleanup_file(TEST_IMG);
 
-    Disk disk(5 * 1024 * 1024, TEST_IMG);
+    Disk disk(16 * 1024 * 1024, TEST_IMG);
     FileSystem fs(disk);
     fs.format();
 
     fs.create_file("/large.bin");
 
-    // Max size = 12 blocks * 4096 = 49152 bytes
-    std::vector<uint8_t> max_data = generate_random_data(49152);
+    // Test direct blocks: 12 * 4096 = 49152 bytes (48KB)
+    std::vector<uint8_t> direct_data = generate_random_data(49152);
 
     try {
-        fs.write_file("/large.bin", max_data);
-        ASSERT(true, "Wrote max file size successfully");
+        fs.write_file("/large.bin", direct_data);
+        ASSERT(true, "Wrote direct blocks (48KB) successfully");
     } catch (...) {
-        ASSERT(false, "Failed to write max file size");
+        ASSERT(false, "Failed to write direct blocks");
     }
 
-    // Try to write ONE byte too many
-    std::vector<uint8_t> too_big(49153);
-    bool caught = false;
+    // Test single indirect: 1024 * 4096 = 4MB
+    std::vector<uint8_t> single_indirect_data = generate_random_data(1024 * 4096);
     try {
-        fs.write_file("/large.bin", too_big);
+        fs.write_file("/large.bin", single_indirect_data);
+        std::cout << "[PASS] Wrote single indirect (4MB) successfully\n";
     } catch (const std::exception& e) {
-        caught = true;
-        std::cout << "[PASS] Caught expected error: " << e.what() << "\n";
+        std::cout << "[FAIL] Failed to write single indirect: " << e.what() << "\n";
+        ASSERT(false, "Failed to write single indirect");
     }
-    ASSERT(caught, "System correctly rejected file > 48KB");
 
     cleanup_file(TEST_IMG);
 }
