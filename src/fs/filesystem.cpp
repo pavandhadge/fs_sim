@@ -466,6 +466,59 @@ void FileSystem::logout() {
     std::cout << "Logged out. Current user is now Root.\n";
 }
 
+void FileSystem::chmod(std::string path, uint16_t mode) {
+    std::vector<std::string> tokens = tokenize_path(path, '/');
+    size_t parent_id = traverse_path_till_parent(tokens);
+    std::string filename = tokens.back();
+
+    size_t file_id = find_inode_in_dir(get_global_inode_ptr(parent_id), filename);
+    if (file_id == 0) throw std::runtime_error("File not found: " + path);
+
+    Inode* file_inode = get_global_inode_ptr(file_id);
+
+    if (current_uid != 0 && file_inode->uid != current_uid) {
+        throw std::runtime_error("Permission denied: Only owner or root can change permissions.");
+    }
+
+    file_inode->permissions = mode;
+    std::cout << "Permissions changed to 0" << std::oct << mode << "\n";
+}
+
+void FileSystem::chown(std::string path, uint16_t uid) {
+    if (current_uid != 0) {
+        throw std::runtime_error("Permission denied: Only root can change ownership.");
+    }
+
+    std::vector<std::string> tokens = tokenize_path(path, '/');
+    size_t parent_id = traverse_path_till_parent(tokens);
+    std::string filename = tokens.back();
+
+    size_t file_id = find_inode_in_dir(get_global_inode_ptr(parent_id), filename);
+    if (file_id == 0) throw std::runtime_error("File not found: " + path);
+
+    Inode* file_inode = get_global_inode_ptr(file_id);
+    file_inode->uid = uid;
+    std::cout << "Owner changed to UID " << uid << "\n";
+}
+
+void FileSystem::chgrp(std::string path, uint16_t gid) {
+    std::vector<std::string> tokens = tokenize_path(path, '/');
+    size_t parent_id = traverse_path_till_parent(tokens);
+    std::string filename = tokens.back();
+
+    size_t file_id = find_inode_in_dir(get_global_inode_ptr(parent_id), filename);
+    if (file_id == 0) throw std::runtime_error("File not found: " + path);
+
+    Inode* file_inode = get_global_inode_ptr(file_id);
+
+    if (current_uid != 0 && file_inode->uid != current_uid) {
+        throw std::runtime_error("Permission denied: Only owner or root can change group.");
+    }
+
+    file_inode->gid = gid;
+    std::cout << "Group changed to GID " << gid << "\n";
+}
+
 bool FileSystem::check_permission(Inode* node, uint16_t access_type) {
     // 1. Root (UID 0) can do EVERYTHING
     if (current_uid == 0) return true;

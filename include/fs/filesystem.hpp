@@ -62,4 +62,8 @@ public:
     void login(uint16_t uid, uint16_t gid);
     void logout();
     uint16_t get_current_user() { return current_uid; }
+
+    void chmod(std::string path, uint16_t mode);
+    void chown(std::string path, uint16_t uid);
+    void chgrp(std::string path, uint16_t gid);
 };

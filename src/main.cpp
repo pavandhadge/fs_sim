@@ -85,7 +85,7 @@ int main() {
     }
 
     std::cout << "\n=== File System REPL ===\n";
-    std::cout << "Commands: ls, touch, mkdir, rm, rmdir, write, read, format, login, logout, whoami, exit\n";
+    std::cout << "Commands: ls, touch, mkdir, rm, rmdir, write, read, format, login, logout, whoami, chmod, chown, chgrp, exit\n";
     std::cout << "Note: Changes are automatically saved when you 'exit'.\n";
 
     // 4. REPL Loop
@@ -181,6 +181,21 @@ int main() {
                 std::vector<uint8_t> data = fs.read_file(args[1]);
                 std::string text(data.begin(), data.end());
                 std::cout << text << "\n";
+            }
+            else if (cmd == "chmod") {
+                if (args.size() < 3) throw std::runtime_error("Usage: chmod <path> <mode>");
+                uint16_t mode = std::stoi(args[2], nullptr, 8);
+                fs.chmod(args[1], mode);
+            }
+            else if (cmd == "chown") {
+                if (args.size() < 3) throw std::runtime_error("Usage: chown <path> <uid>");
+                uint16_t uid = std::stoi(args[2]);
+                fs.chown(args[1], uid);
+            }
+            else if (cmd == "chgrp") {
+                if (args.size() < 3) throw std::runtime_error("Usage: chgrp <path> <gid>");
+                uint16_t gid = std::stoi(args[2]);
+                fs.chgrp(args[1], gid);
             }
             else {
                 std::cout << "Unknown command: " << cmd << "\n";
