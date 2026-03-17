@@ -204,27 +204,3 @@ write /largefile <48KB+_of_data>
 
 ---
 
-# Remaining Features to Implement
-
-## High Priority
-- [ ] Indirect block pointers (single, double, triple)
-- [ ] Symbolic links (`ln -s target linkname`)
-- [ ] Hard links (`ln target linkname`)
-
-## Medium Priority
-- [ ] `stat` command - show detailed file info (size, blocks, times)
-- [ ] `ls -l` with human-readable sizes
-- [ ] `.` and `..` directory entries for proper navigation
-
-## Low Priority
-- [ ] Timestamps (atime, mtime, ctime) stored in inode
-- [ ] Extended attributes (xattr)
-- [ ] Reserved blocks for root user
-- [ ] Filesystem check utility (`fsck`)
-- [ ] Sparse file support (holes in files)
-
-## Nice to Have
-- [ ] Username-based login (`login root` instead of `login 0 0`)
-- [ ] `/etc/passwd` and `/etc/group` files
-- [ ] Command history in REPL
-- [ ] Tab completion

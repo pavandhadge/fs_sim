@@ -63,6 +63,10 @@ void FileSystem::format() {
     // Explicitly zero block pointers (redundant but safe)
     std::memset(root->direct_blocks, 0, sizeof(root->direct_blocks));
 
+    // Add . and .. to root directory
+    add_entry_to_dir(root, root_id, ".");
+    add_entry_to_dir(root, root_id, "..");
+
     // 8. Write Updated SuperBlock to Disk (Final Update)
     std::memcpy(sb_buffer.data(), sb, sizeof(SuperBlock)); // Update buffer
     disk.write_block(0, sb_buffer.data());
@@ -125,24 +129,76 @@ size_t FileSystem::find_inode_in_dir(Inode* parent_inode, const std::string& nam
 }
 
 size_t FileSystem::traverse_path_till_parent(std::vector<std::string>& tokenized_path) {
-    // GEMINI FIX: If path is empty (root), return root
     if (tokenized_path.empty()) return sb->home_dir_inode;
 
     size_t current_id = sb->home_dir_inode;
+    std::vector<size_t> path_stack;
+    path_stack.push_back(sb->home_dir_inode);
 
-    // GEMINI FIX: If path is just "/file", parent is root.
     if (tokenized_path.size() == 1) return current_id;
 
     for (size_t i = 0; i < tokenized_path.size() - 1; i++) {
+        std::string& part = tokenized_path[i];
+        
+        if (part == ".") {
+            continue;
+        } else if (part == "..") {
+            if (path_stack.size() > 1) {
+                path_stack.pop_back();
+                current_id = path_stack.back();
+            }
+            continue;
+        }
+
         Inode* current_inode = get_global_inode_ptr(current_id);
         if (current_inode->file_type != FS_DIRECTORY) {
-            throw std::runtime_error("Invalid Path: '" + tokenized_path[i] + "' is not a directory.");
+            throw std::runtime_error("Invalid Path: '" + part + "' is not a directory.");
         }
-        size_t next_id = find_inode_in_dir(current_inode, tokenized_path[i]);
+        
+        size_t next_id = find_inode_in_dir(current_inode, part);
         if (next_id == 0) {
-            throw std::runtime_error("Path not found: " + tokenized_path[i]);
+            throw std::runtime_error("Path not found: " + part);
         }
-        current_id = next_id;
+
+        Inode* next_inode = get_global_inode_ptr(next_id);
+        if (next_inode->file_type == FS_SYMLINK) {
+            size_t block_size = disk.get_block_size();
+            char target[4096];
+            std::memset(target, 0, sizeof(target));
+            if (next_inode->direct_blocks[0] != 0) {
+                std::memcpy(target, disk.get_ptr(next_inode->direct_blocks[0]), std::min(block_size, next_inode->file_size));
+            }
+            std::string symlink_target(target, next_inode->file_size);
+            
+            auto sym_tokens = tokenize_path(symlink_target, '/');
+            if (!symlink_target.empty() && symlink_target[0] == '/') {
+                current_id = sb->home_dir_inode;
+                path_stack.clear();
+                path_stack.push_back(sb->home_dir_inode);
+            }
+            
+            for (auto& tok : sym_tokens) {
+                if (tok == "." || tok.empty()) continue;
+                if (tok == "..") {
+                    if (path_stack.size() > 1) {
+                        path_stack.pop_back();
+                        current_id = path_stack.back();
+                    }
+                } else {
+                    Inode* curr = get_global_inode_ptr(current_id);
+                    if (curr->file_type != FS_DIRECTORY) {
+                        throw std::runtime_error("Symlink points to non-directory");
+                    }
+                    size_t found = find_inode_in_dir(curr, tok);
+                    if (found == 0) throw std::runtime_error("Symlink target not found: " + tok);
+                    current_id = found;
+                    path_stack.push_back(current_id);
+                }
+            }
+        } else {
+            current_id = next_id;
+            path_stack.push_back(current_id);
+        }
     }
     return current_id;
 }
@@ -215,6 +271,13 @@ void FileSystem::create_fs_entry(std::string path, FS_FILE_TYPES type) {
     std::memset(new_inode->direct_blocks, 0, sizeof(new_inode->direct_blocks));
 
     add_entry_to_dir(parent_inode, new_id, filename);
+
+    if (type == FS_DIRECTORY) {
+        Inode* new_dir_inode = get_global_inode_ptr(new_id);
+        add_entry_to_dir(new_dir_inode, new_id, ".");
+        add_entry_to_dir(new_dir_inode, parent_id, "..");
+    }
+
     std::cout << (type == FS_DIRECTORY ? "Directory" : "File") << " '" << filename << "' created.\n";
 }
 
@@ -226,6 +289,85 @@ void FileSystem::create_file(std::string path) {
 
 void FileSystem::create_dir(std::string path) {
     create_fs_entry(path, FS_FILE_TYPES::FS_DIRECTORY);
+}
+
+void FileSystem::create_symlink(std::string target, std::string link_path) {
+    auto tokenized_path = tokenize_path(link_path, '/');
+    if (tokenized_path.empty()) throw std::runtime_error("Link path cannot be empty.");
+
+    std::string link_name = tokenized_path.back();
+    size_t parent_id = traverse_path_till_parent(tokenized_path);
+    Inode* parent_inode = get_global_inode_ptr(parent_id);
+
+    if (find_inode_in_dir(parent_inode, link_name) != 0) {
+        throw std::runtime_error("Error: '" + link_name + "' already exists.");
+    }
+
+    int new_id = -1;
+    for (int i = 0; i < block_group_managers.size(); i++) {
+        new_id = block_group_managers[i].allocate_inode();
+        if (new_id != -1) break;
+    }
+    if (new_id == -1) throw std::runtime_error("Disk Full.");
+
+    Inode* new_inode = get_global_inode_ptr(new_id);
+    new_inode->id = new_id;
+    new_inode->file_type = FS_SYMLINK;
+    new_inode->file_size = target.size();
+    new_inode->uid = current_uid;
+    new_inode->gid = current_gid;
+    new_inode->permissions = 0777;
+
+    std::memset(new_inode->direct_blocks, 0, sizeof(new_inode->direct_blocks));
+
+    size_t block_size = disk.get_block_size();
+    size_t required_blocks = (target.size() + block_size - 1) / block_size;
+    
+    if (required_blocks > 1) {
+        throw std::runtime_error("Symlink target too long.");
+    }
+
+    size_t block_num = block_group_managers[new_id / sb->inodes_per_group].allocate_block();
+    if (block_num == (size_t)-1) throw std::runtime_error("Disk Full.");
+    
+    new_inode->direct_blocks[0] = block_num;
+    std::memset(disk.get_ptr(block_num), 0, block_size);
+    std::memcpy(disk.get_ptr(block_num), target.c_str(), target.size());
+
+    add_entry_to_dir(parent_inode, new_id, link_name);
+    std::cout << "Symlink '" << link_name << "' -> '" << target << "' created.\n";
+}
+
+FileStats FileSystem::get_stats(std::string path) {
+    auto tokenized_path = tokenize_path(path, '/');
+    std::string filename = tokenized_path.back();
+    size_t parent_id = traverse_path_till_parent(tokenized_path);
+    Inode* parent_inode = get_global_inode_ptr(parent_id);
+
+    size_t file_id = find_inode_in_dir(parent_inode, filename);
+    if (file_id == 0) throw std::runtime_error("File not found: " + path);
+
+    Inode* inode = get_global_inode_ptr(file_id);
+    
+    FileStats stats;
+    stats.inode_id = inode->id;
+    stats.uid = inode->uid;
+    stats.gid = inode->gid;
+    stats.permissions = inode->permissions;
+    stats.file_size = inode->file_size;
+    stats.file_type = inode->file_type;
+    
+    if (inode->file_type == FS_SYMLINK) {
+        size_t block_size = disk.get_block_size();
+        if (inode->direct_blocks[0] != 0) {
+            char target[4096];
+            std::memset(target, 0, sizeof(target));
+            std::memcpy(target, disk.get_ptr(inode->direct_blocks[0]), std::min(block_size, inode->file_size));
+            stats.symlink_target = std::string(target, inode->file_size);
+        }
+    }
+    
+    return stats;
 }
 
 void FileSystem::write_file(std::string path, const std::vector<uint8_t>& data) {
@@ -368,12 +510,15 @@ void FileSystem::delete_file(std::string path) {
         DirEntry* entry = reinterpret_cast<DirEntry*>(disk.get_ptr(parent_inode->direct_blocks[i]));
 
         for (int j = 0; j < max_entries; j++) {
-            if (entry[j].inode_id != 0 && std::strncmp(entry[j].name, filename.c_str(), 255) == 0) {
-                release_file_resources(entry[j].inode_id, true);
-                std::memset(&entry[j], 0, sizeof(DirEntry));
-                parent_inode->file_size -= sizeof(DirEntry);
-                std::cout << "Deleted " << filename << "\n";
-                return;
+            if (entry[j].inode_id != 0) {
+                std::string entry_name(entry[j].name, entry[j].name_len);
+                if (entry_name == filename) {
+                    release_file_resources(entry[j].inode_id, true);
+                    std::memset(&entry[j], 0, sizeof(DirEntry));
+                    parent_inode->file_size -= sizeof(DirEntry);
+                    std::cout << "Deleted " << filename << "\n";
+                    return;
+                }
             }
         }
     }
@@ -458,6 +603,9 @@ void FileSystem::recursive_resource_release(size_t dir_inode_id) {
         DirEntry* entry = reinterpret_cast<DirEntry*>(disk.get_ptr(dir->direct_blocks[i]));
         for (int j=0; j<max; j++) {
             if (entry[j].inode_id != 0) {
+                std::string entry_name(entry[j].name, entry[j].name_len);
+                if (entry_name == "." || entry_name == "..") continue;
+                
                 Inode* child = get_global_inode_ptr(entry[j].inode_id);
                 if (child->file_type == FS_DIRECTORY) recursive_resource_release(entry[j].inode_id);
                 else release_file_resources(entry[j].inode_id, true);
@@ -486,22 +634,25 @@ void FileSystem::delete_dir(std::string path) {
         DirEntry* entry = reinterpret_cast<DirEntry*>(disk.get_ptr(parent_inode->direct_blocks[i]));
 
         for (int j = 0; j < max_entries; j++) {
-            if (entry[j].inode_id != 0 && std::strncmp(entry[j].name, dirname.c_str(), 255) == 0) {
-                Inode* target = get_global_inode_ptr(entry[j].inode_id);
-                if (target->file_type != FS_DIRECTORY) throw std::runtime_error("Not a directory.");
+            if (entry[j].inode_id != 0) {
+                std::string entry_name(entry[j].name, entry[j].name_len);
+                if (entry_name == dirname) {
+                    Inode* target = get_global_inode_ptr(entry[j].inode_id);
+                    if (target->file_type != FS_DIRECTORY) throw std::runtime_error("Not a directory.");
 
-                recursive_resource_release(entry[j].inode_id);
-                std::memset(&entry[j], 0, sizeof(DirEntry));
-                parent_inode->file_size -= sizeof(DirEntry);
-                std::cout << "Deleted directory " << dirname << "\n";
-                return;
+                    recursive_resource_release(entry[j].inode_id);
+                    std::memset(&entry[j], 0, sizeof(DirEntry));
+                    parent_inode->file_size -= sizeof(DirEntry);
+                    std::cout << "Deleted directory " << dirname << "\n";
+                    return;
+                }
             }
         }
     }
     throw std::runtime_error("Directory not found.");
 }
 
-std::vector<FileEntry> FileSystem::list_dir(std::string path) {
+std::vector<FileEntry> FileSystem::list_dir(std::string path, bool include_special) {
     auto tokenized_path = tokenize_path(path, '/');
     size_t target_id;
 
@@ -541,14 +692,19 @@ std::vector<FileEntry> FileSystem::list_dir(std::string path) {
         DirEntry* entry = reinterpret_cast<DirEntry*>(disk.get_ptr(dir->direct_blocks[i]));
         for (int j = 0; j < max; j++) {
             if (entry[j].inode_id != 0) {
-              Inode* item_inode = get_global_inode_ptr(entry[j].inode_id);
-              results.push_back({
-                  std::string(entry[j].name),
-                  item_inode->uid,
-                  item_inode->gid,
-                  item_inode->permissions,
-                  item_inode->file_type == FS_DIRECTORY
-              });
+                std::string entry_name(entry[j].name, entry[j].name_len);
+                if (!include_special && (entry_name == "." || entry_name == "..")) {
+                    continue;
+                }
+                Inode* item_inode = get_global_inode_ptr(entry[j].inode_id);
+                results.push_back({
+                    entry_name,
+                    item_inode->uid,
+                    item_inode->gid,
+                    item_inode->permissions,
+                    item_inode->file_type == FS_DIRECTORY,
+                    item_inode->file_type == FS_SYMLINK
+                });
             }
         }
     }

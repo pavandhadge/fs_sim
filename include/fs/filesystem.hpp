@@ -13,6 +13,17 @@ struct FileEntry {
     uint16_t gid;
     uint16_t permissions;
     bool is_directory;
+    bool is_symlink;
+};
+
+struct FileStats {
+    size_t inode_id;
+    uint16_t uid;
+    uint16_t gid;
+    uint16_t permissions;
+    size_t file_size;
+    FS_FILE_TYPES file_type;
+    std::string symlink_target;
 };
 
 class FileSystem {
@@ -53,10 +64,12 @@ public:
 
     void create_dir(std::string path);
     void delete_dir(std::string path);
+    void create_symlink(std::string target, std::string link_path);
+    FileStats get_stats(std::string path);
 
     // CHANGE THE RETURN TYPE HERE
     // From std::vector<std::string> to std::vector<FileEntry>
-    std::vector<FileEntry> list_dir(std::string path);
+    std::vector<FileEntry> list_dir(std::string path, bool include_special = false);
 
     // Session Management
     void login(uint16_t uid, uint16_t gid);
