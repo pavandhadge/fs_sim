@@ -7,7 +7,8 @@
 enum FS_FILE_TYPES {
     FS_FREE = 0,
     FS_FILE = 1,
-    FS_DIRECTORY = 2
+    FS_DIRECTORY = 2,
+    FS_SYMLINK = 3
 };
 
 #pragma pack(push, 1)

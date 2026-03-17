@@ -7,7 +7,7 @@ std::vector<std::string> tokenize_path(const std::string& input, char delimiter)
     std::stringstream ss(input);
 
     while(std::getline(ss, token, delimiter)) {
-        if (!token.empty()) { // GEMINI FIX: Skip empty tokens (fixes // issues)
+        if (!token.empty() && token != "/") { // Skip empty tokens and stray slashes
             tokens.push_back(token);
         }
     }

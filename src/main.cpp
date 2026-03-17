@@ -4,7 +4,8 @@
 #include <string>
 #include <vector>
 #include <sstream>
-#include <limits> // Required for numeric_limits
+#include <limits>
+#include <iomanip>
 
 // Helper to split command line arguments
 std::vector<std::string> parse_command(const std::string& input) {
@@ -17,8 +18,10 @@ std::vector<std::string> parse_command(const std::string& input) {
     return tokens;
 }
 
-std::string format_permissions(uint16_t p, bool is_dir) {
-    std::string res = is_dir ? "d" : "-";
+std::string format_permissions(uint16_t p, bool is_dir, bool is_symlink = false) {
+    std::string res;
+    if (is_symlink) res = "l";
+    else res = is_dir ? "d" : "-";
     const char* chars = "rwx";
     for (int i = 6; i >= 0; i -= 3) {
         res += (p & (4 << i)) ? 'r' : '-';
@@ -26,6 +29,21 @@ std::string format_permissions(uint16_t p, bool is_dir) {
         res += (p & (1 << i)) ? 'x' : '-';
     }
     return res;
+}
+
+std::string format_size(size_t size) {
+    if (size == 0) return "0B";
+    const char* units = "BKMGTP";
+    int i = 0;
+    double s = size;
+    while (s >= 1024 && i < 5) {
+        s /= 1024;
+        i++;
+    }
+    char buf[32];
+    if (i == 0) snprintf(buf, sizeof(buf), "%zu%s", size, units);
+    else snprintf(buf, sizeof(buf), "%.1f%s", s, units);
+    return std::string(buf);
 }
 
 int main() {
@@ -85,7 +103,7 @@ int main() {
     }
 
     std::cout << "\n=== File System REPL ===\n";
-    std::cout << "Commands: ls, touch, mkdir, rm, rmdir, write, read, format, login, logout, whoami, chmod, chown, chgrp, exit\n";
+    std::cout << "Commands: ls, touch, mkdir, rm, rmdir, write, read, format, login, logout, whoami, chmod, chown, chgrp, ln, stat, exit\n";
     std::cout << "Note: Changes are automatically saved when you 'exit'.\n";
 
     // 4. REPL Loop
@@ -135,16 +153,32 @@ int main() {
                 fs.mount();
             }
             else if (cmd == "ls") {
-                std::string path = (args.size() > 1) ? args[1] : "/";
-                auto entries = fs.list_dir(path);
+                bool long_format = false;
+                std::string path = "/";
+                
+                for (size_t i = 1; i < args.size(); i++) {
+                    if (args[i] == "-l") long_format = true;
+                    else if (args[i] == "-la" || args[i] == "-al") {
+                        long_format = true;
+                    }
+                    else path = args[i];
+                }
+                
+                auto entries = fs.list_dir(path, true);
 
                 std::cout << "Listing '" << path << "':\n";
                 if (entries.empty()) std::cout << "(empty)\n";
                 for (const auto& entry : entries) {
-                    std::cout << format_permissions(entry.permissions, entry.is_directory)
-                      << "  " << entry.uid 
-                      << "  " << entry.gid 
-                      << "  " << entry.name << "\n";
+                    if (!long_format) {
+                        std::cout << entry.name << "\n";
+                    } else {
+                        if (entry.name == "." || entry.name == "..") continue;
+                        std::cout << format_permissions(entry.permissions, entry.is_directory, entry.is_symlink)
+                          << " " << entry.uid 
+                          << " " << entry.gid 
+                          << " " << std::setw(5) << std::left << (long_format ? format_size(0) : "0")
+                          << " " << entry.name << "\n";
+                    }
                 }
             }
             else if (cmd == "mkdir") {
@@ -196,6 +230,28 @@ int main() {
                 if (args.size() < 3) throw std::runtime_error("Usage: chgrp <path> <gid>");
                 uint16_t gid = std::stoi(args[2]);
                 fs.chgrp(args[1], gid);
+            }
+            else if (cmd == "ln") {
+                if (args.size() < 3) throw std::runtime_error("Usage: ln -s <target> <link_path>");
+                if (args[1] != "-s") throw std::runtime_error("Only symbolic links supported. Use: ln -s <target> <link_path>");
+                fs.create_symlink(args[2], args[3]);
+            }
+            else if (cmd == "stat") {
+                if (args.size() < 2) throw std::runtime_error("Usage: stat <path>");
+                FileStats stats = fs.get_stats(args[1]);
+                std::cout << "  Inode: " << stats.inode_id << "\n";
+                std::cout << "  Size: " << stats.file_size << "\n";
+                std::cout << "  UID: " << stats.uid << "\n";
+                std::cout << "  GID: " << stats.gid << "\n";
+                std::cout << "  Permissions: " << format_permissions(stats.permissions, stats.file_type == FS_DIRECTORY, stats.file_type == FS_SYMLINK) << "\n";
+                std::string type_str = "unknown";
+                if (stats.file_type == FS_FILE) type_str = "file";
+                else if (stats.file_type == FS_DIRECTORY) type_str = "directory";
+                else if (stats.file_type == FS_SYMLINK) type_str = "symlink";
+                std::cout << "  Type: " << type_str << "\n";
+                if (!stats.symlink_target.empty()) {
+                    std::cout << "  Target: " << stats.symlink_target << "\n";
+                }
             }
             else {
                 std::cout << "Unknown command: " << cmd << "\n";
