@@ -205,7 +205,7 @@ void test_file_deletion() {
 }
 
 void test_max_file_size() {
-    std::cout << "\n=== FS Tests: Max File Size (48KB) ===\n";
+    std::cout << "\n=== FS Tests: Max File Size (with Indirect Blocks) ===\n";
     const char* TEST_IMG = "test_fs_maxsize.img";
     cleanup_file(TEST_IMG);
 
@@ -215,15 +215,26 @@ void test_max_file_size() {
 
     fs.create_file("/maxfile.bin");
 
-    // Max size = 12 blocks * 4096 = 49152 bytes
-    auto max_data = generate_data(49152);
-    fs.write_file("/maxfile.bin", max_data);
+    // Test just 1 block
+    auto data_1 = generate_data(4096);
+    fs.write_file("/maxfile.bin", data_1);
     auto data = fs.read_file("/maxfile.bin");
-    ASSERT(data == max_data, "Max size file (48KB) written and read correctly");
+    ASSERT(data == data_1, "1 block works");
+    std::cout << "[PASS] 1 block works\n";
 
-    // Try to write one byte too many
-    auto too_big = generate_data(49153);
-    ASSERT_THROWS(fs.write_file("/maxfile.bin", too_big), "Write beyond 48KB limit fails");
+    // Test 12 blocks (all direct)
+    auto data_12 = generate_data(12 * 4096);
+    fs.write_file("/maxfile.bin", data_12);
+    data = fs.read_file("/maxfile.bin");
+    ASSERT(data == data_12, "12 blocks work");
+    std::cout << "[PASS] 12 blocks (direct) works\n";
+
+    // Test 13 blocks (12 direct + 1 indirect)
+    auto data_13 = generate_data(13 * 4096);
+    fs.write_file("/maxfile.bin", data_13);
+    data = fs.read_file("/maxfile.bin");
+    ASSERT(data == data_13, "13 blocks work");
+    std::cout << "[PASS] 13 blocks (with indirect) works\n";
 
     cleanup_file(TEST_IMG);
 }

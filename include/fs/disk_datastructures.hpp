@@ -48,6 +48,11 @@ struct Inode {
     uint16_t gid;         // Group ID
     uint16_t permissions;  // e.g., 0755 (rwxr-xr-x)
     size_t direct_blocks[12];
+    
+    // Indirect block pointers
+    size_t single_indirect;   // Level 1: points to a block containing block pointers
+    size_t double_indirect;   // Level 2: points to blocks containing single indirect blocks
+    size_t triple_indirect;   // Level 3: points to blocks containing double indirect blocks
 
     Inode() {
         id = 0;
@@ -57,6 +62,9 @@ struct Inode {
         gid = 0;          // Default to Root
         permissions = 0644; // Default: Owner can read/write, others read only
         std::memset(direct_blocks, 0, sizeof(direct_blocks));
+        single_indirect = 0;
+        double_indirect = 0;
+        triple_indirect = 0;
     }
 };
 

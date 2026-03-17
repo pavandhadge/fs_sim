@@ -240,38 +240,59 @@ void FileSystem::write_file(std::string path, const std::vector<uint8_t>& data) 
     Inode* file_inode = get_global_inode_ptr(file_id);
     if (file_inode->file_type != FS_FILE) throw std::runtime_error("Not a file.");
 
-    // Logic to allocate blocks for data
     size_t block_size = disk.get_block_size();
     size_t required_blocks = (data.size() + block_size - 1) / block_size;
-    if (required_blocks > 12) throw std::runtime_error("File too large (>48KB).");
+    
+    const size_t MAX_SINGLE = 12 + 1024;
+    if (required_blocks > MAX_SINGLE) {
+        throw std::runtime_error("File too large (max 4MB for now).");
+    }
 
-    if (!check_permission(file_inode, 2)) { // 2 = Write
+    if (!check_permission(file_inode, 2)) {
         throw std::runtime_error("Permission denied: No write access to this file.");
     }
 
-    // Free extra blocks if shrinking
-    for (size_t i = required_blocks; i < 12; ++i) {
-        if (file_inode->direct_blocks[i] != 0) {
-             int gid = file_inode->direct_blocks[i] / sb->blocks_per_group;
-             block_group_managers[gid].free_block(file_inode->direct_blocks[i]);
-             file_inode->direct_blocks[i] = 0;
+    // Free all existing blocks first
+    release_file_resources(file_inode->id, false);
+    
+    // Allocate indirect block if needed
+    if (required_blocks > 12) {
+        for (size_t g = 0; g < block_group_managers.size(); g++) {
+            size_t bid = block_group_managers[g].allocate_block();
+            if (bid != (size_t)-1) {
+                file_inode->single_indirect = bid;
+                break;
+            }
         }
+        if (file_inode->single_indirect == 0) throw std::runtime_error("Disk Full.");
+        memset(disk.get_ptr(file_inode->single_indirect), 0, block_size);
     }
-
-    // Write Data
+    
+    // Allocate and write blocks
     for (size_t i = 0; i < required_blocks; ++i) {
-        if (file_inode->direct_blocks[i] == 0) {
-            int gid = file_inode->id / sb->inodes_per_group;
-            int bid = block_group_managers[gid].allocate_block();
-            if (bid == -1) throw std::runtime_error("Disk Full.");
-            file_inode->direct_blocks[i] = bid;
+        size_t block_num = 0;
+        bool allocated = false;
+        
+        for (size_t g = 0; g < block_group_managers.size() && !allocated; g++) {
+            size_t bid = block_group_managers[g].allocate_block();
+            if (bid != (size_t)-1) {
+                block_num = bid;
+                allocated = true;
+            }
+        }
+        
+        if (!allocated) throw std::runtime_error("Disk Full.");
+        
+        if (i < 12) {
+            file_inode->direct_blocks[i] = block_num;
+        } else {
+            size_t* indirect = reinterpret_cast<size_t*>(disk.get_ptr(file_inode->single_indirect));
+            indirect[i - 12] = block_num;
         }
 
         size_t offset = i * block_size;
         size_t bytes = std::min(block_size, data.size() - offset);
-
-        // GEMINI FIX: Use get_ptr directly to avoid temp buffer
-        std::memcpy(disk.get_ptr(file_inode->direct_blocks[i]), data.data() + offset, bytes);
+        std::memcpy(disk.get_ptr(block_num), data.data() + offset, bytes);
     }
 
     file_inode->file_size = data.size();
@@ -280,9 +301,27 @@ void FileSystem::write_file(std::string path, const std::vector<uint8_t>& data) 
 
 void FileSystem::read_direct_block_to_buffer(Inode* file, uint8_t* buffer) {
     size_t block_size = disk.get_block_size();
-    for (int i = 0; i < 12; i++) {
+    size_t file_size = file->file_size;
+    size_t blocks_to_read = (file_size + block_size - 1) / block_size;
+    
+    // Read direct blocks
+    size_t direct_count = std::min<size_t>(12, blocks_to_read);
+    for (size_t i = 0; i < direct_count; i++) {
         if (file->direct_blocks[i] == 0) break;
         std::memcpy(buffer + (i * block_size), disk.get_ptr(file->direct_blocks[i]), block_size);
+    }
+    
+    if (blocks_to_read <= 12) return;
+    
+    // Read single indirect blocks
+    size_t single_needed = std::min<size_t>(blocks_to_read - 12, 1024);
+    if (file->single_indirect != 0) {
+        size_t* indirect_block = reinterpret_cast<size_t*>(disk.get_ptr(file->single_indirect));
+        for (size_t i = 0; i < single_needed; i++) {
+            if (indirect_block[i] == 0) break;
+            size_t block_idx = 12 + i;
+            std::memcpy(buffer + (block_idx * block_size), disk.get_ptr(indirect_block[i]), block_size);
+        }
     }
 }
 
@@ -295,16 +334,19 @@ std::vector<uint8_t> FileSystem::read_file(std::string path) {
     if (file_id == 0) throw std::runtime_error("File not found.");
     Inode* file_inode = get_global_inode_ptr(file_id);
 
-    if (!check_permission(file_inode, 4)) { // 4 = Read
+    if (!check_permission(file_inode, 4)) {
         throw std::runtime_error("Permission denied: No read access to this file.");
     }
 
-    size_t max_size = 12 * disk.get_block_size();
-    std::vector<uint8_t> buffer(max_size);
+    size_t file_size = file_inode->file_size;
+    size_t block_size = disk.get_block_size();
+    size_t required_blocks = (file_size + block_size - 1) / block_size;
+    size_t buffer_size = required_blocks * block_size;
+    
+    std::vector<uint8_t> buffer(buffer_size);
     read_direct_block_to_buffer(file_inode, buffer.data());
 
-    // GEMINI FIX: Resize to actual data size
-    buffer.resize(file_inode->file_size);
+    buffer.resize(file_size);
     return buffer;
 }
 
@@ -327,7 +369,7 @@ void FileSystem::delete_file(std::string path) {
 
         for (int j = 0; j < max_entries; j++) {
             if (entry[j].inode_id != 0 && std::strncmp(entry[j].name, filename.c_str(), 255) == 0) {
-                release_file_resources(entry[j].inode_id);
+                release_file_resources(entry[j].inode_id, true);
                 std::memset(&entry[j], 0, sizeof(DirEntry));
                 parent_inode->file_size -= sizeof(DirEntry);
                 std::cout << "Deleted " << filename << "\n";
@@ -338,15 +380,74 @@ void FileSystem::delete_file(std::string path) {
     throw std::runtime_error("File not found.");
 }
 
-void FileSystem::release_file_resources(size_t inode_id) {
+void FileSystem::release_file_resources(size_t inode_id, bool free_inode_too) {
     Inode* node = get_global_inode_ptr(inode_id);
-    for (int i=0; i<12; i++) {
+    
+    // Free direct blocks
+    for (int i = 0; i < 12; i++) {
         if (node->direct_blocks[i] != 0) {
             block_group_managers[node->direct_blocks[i] / sb->blocks_per_group].free_block(node->direct_blocks[i]);
             node->direct_blocks[i] = 0;
         }
     }
-    block_group_managers[inode_id / sb->inodes_per_group].free_inode(inode_id);
+    
+    // Free single indirect blocks
+    if (node->single_indirect != 0) {
+        size_t* indirect = reinterpret_cast<size_t*>(disk.get_ptr(node->single_indirect));
+        for (size_t i = 0; i < 1024; i++) {
+            if (indirect[i] != 0) {
+                block_group_managers[indirect[i] / sb->blocks_per_group].free_block(indirect[i]);
+            }
+        }
+        block_group_managers[node->single_indirect / sb->blocks_per_group].free_block(node->single_indirect);
+        node->single_indirect = 0;
+    }
+    
+    // Free double indirect blocks
+    if (node->double_indirect != 0) {
+        size_t* double_block = reinterpret_cast<size_t*>(disk.get_ptr(node->double_indirect));
+        for (size_t i = 0; i < 1024; i++) {
+            if (double_block[i] != 0) {
+                size_t* single_block = reinterpret_cast<size_t*>(disk.get_ptr(double_block[i]));
+                for (size_t j = 0; j < 1024; j++) {
+                    if (single_block[j] != 0) {
+                        block_group_managers[single_block[j] / sb->blocks_per_group].free_block(single_block[j]);
+                    }
+                }
+                block_group_managers[double_block[i] / sb->blocks_per_group].free_block(double_block[i]);
+            }
+        }
+        block_group_managers[node->double_indirect / sb->blocks_per_group].free_block(node->double_indirect);
+        node->double_indirect = 0;
+    }
+    
+    // Free triple indirect blocks
+    if (node->triple_indirect != 0) {
+        size_t* triple_block = reinterpret_cast<size_t*>(disk.get_ptr(node->triple_indirect));
+        for (size_t i = 0; i < 1024; i++) {
+            if (triple_block[i] != 0) {
+                size_t* double_block = reinterpret_cast<size_t*>(disk.get_ptr(triple_block[i]));
+                for (size_t j = 0; j < 1024; j++) {
+                    if (double_block[j] != 0) {
+                        size_t* single_block = reinterpret_cast<size_t*>(disk.get_ptr(double_block[j]));
+                        for (size_t k = 0; k < 1024; k++) {
+                            if (single_block[k] != 0) {
+                                block_group_managers[single_block[k] / sb->blocks_per_group].free_block(single_block[k]);
+                            }
+                        }
+                        block_group_managers[double_block[j] / sb->blocks_per_group].free_block(double_block[j]);
+                    }
+                }
+                block_group_managers[triple_block[i] / sb->blocks_per_group].free_block(triple_block[i]);
+            }
+        }
+        block_group_managers[node->triple_indirect / sb->blocks_per_group].free_block(node->triple_indirect);
+        node->triple_indirect = 0;
+    }
+    
+    if (free_inode_too) {
+        block_group_managers[inode_id / sb->inodes_per_group].free_inode(inode_id);
+    }
 }
 
 void FileSystem::recursive_resource_release(size_t dir_inode_id) {
@@ -359,7 +460,7 @@ void FileSystem::recursive_resource_release(size_t dir_inode_id) {
             if (entry[j].inode_id != 0) {
                 Inode* child = get_global_inode_ptr(entry[j].inode_id);
                 if (child->file_type == FS_DIRECTORY) recursive_resource_release(entry[j].inode_id);
-                else release_file_resources(entry[j].inode_id);
+                else release_file_resources(entry[j].inode_id, true);
             }
         }
         // Free the directory block itself

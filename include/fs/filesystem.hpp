@@ -26,7 +26,7 @@ private:
     size_t find_inode_in_dir(Inode* parent_inode, const std::string& name);
     size_t traverse_path_till_parent(std::vector<std::string>& tokenized_path);
     void read_direct_block_to_buffer(Inode* file, uint8_t* buffer);
-    void release_file_resources(size_t inode_id);
+    void release_file_resources(size_t inode_id, bool free_inode_too);
     void recursive_resource_release(size_t dir_inode_id);
     void add_entry_to_dir(Inode* parent_inode, size_t newfile_id, std::string filename);
 
